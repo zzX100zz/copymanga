@@ -2,7 +2,6 @@ package top.fumiama.copymangaweb.web
 
 import android.util.Log
 import android.webkit.JavascriptInterface
-import top.fumiama.copymangaweb.activity.DlActivity
 import top.fumiama.copymangaweb.activity.MainActivity.Companion.mh
 import top.fumiama.copymangaweb.activity.MainActivity.Companion.wm
 import top.fumiama.copymangaweb.handler.MainHandler
@@ -60,13 +59,8 @@ class JSHidden(
     }
 
     @JavascriptInterface
-    fun setTitle(title:String){
-        Log.d("MyJSH", "Set title: $title")
-        DlActivity.comicName = title
-    }
-    @JavascriptInterface
-    fun setFab(content: String){
-        wm?.get()?.setFab(content)
+    fun setFab(content: String, sourceUrl: String, comicTitle: String){
+        wm?.get()?.setFab(content, sourceUrl, comicTitle)
     }
     @JavascriptInterface
     fun setLoadingDialog(display: Boolean) {

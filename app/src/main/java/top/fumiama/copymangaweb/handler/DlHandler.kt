@@ -20,10 +20,12 @@ class DlHandler(activity: DlActivity, looper: Looper) : Handler(looper) {
     @SuppressLint("SetTextI18n")
     override fun handleMessage(msg: Message) {
         super.handleMessage(msg)
+        val chapterIndex = msg.arg1
+        val pageNumber = msg.arg2
         when (msg.what) {
-            -2 -> d?.setLayouts()
-            1 -> {
-                d?.tbtnlist?.get(msg.arg1)?.apply { post {
+            INITIALIZE_LAYOUTS -> d?.setLayouts()
+            CHAPTER_DOWNLOAD_SUCCEEDED -> {
+                d?.tbtnlist?.get(chapterIndex)?.apply { post {
                     setBackgroundResource(R.drawable.rndbg_checked)
                     isChecked = false
                     d?.updateProgressBar()
@@ -39,15 +41,15 @@ class DlHandler(activity: DlActivity, looper: Looper) : Handler(looper) {
                     }
                 } }
             }
-            -1 -> {
-                d?.tbtnlist?.get(msg.arg1)?.apply { post {
+            CHAPTER_DOWNLOAD_FAILED -> {
+                d?.tbtnlist?.get(chapterIndex)?.apply { post {
                     setBackgroundResource(R.drawable.rndbg_error)
                     d!!.dldChapter--
-                    Toast.makeText(d, "下载${d?.tbtnlist?.get(msg.arg1)?.textOn}失败", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(d, "下载${d?.tbtnlist?.get(chapterIndex)?.textOn}失败", Toast.LENGTH_SHORT).show()
                     d?.updateProgressBar()
                 } }
             }
-            4 -> {
+            TOGGLE_SELECT_ALL -> {
                 d?.mBinding?.dldlbar?.pdwn?.apply { post { progress = 0 } }
                 val selectDownloaded = d?.multiSelect?:false
                 if (d?.haveSElectAll == true) {
@@ -81,27 +83,27 @@ class DlHandler(activity: DlActivity, looper: Looper) : Handler(looper) {
                     text = "${d?.dldChapter}/${d?.checkedChapter}"
                 } }
             }
-            5 -> {
-                setSize(msg.arg2, msg.arg1)
-                d?.updateProgressBar(msg.arg2, size)
-                if (!(msg.obj as Boolean)) {
-                    Toast.makeText(d, "下载${d?.tbtnlist?.get(msg.arg1)?.textOn}的第${msg.arg2}页失败", Toast.LENGTH_SHORT).show()
+            PAGE_DOWNLOAD_FINISHED -> {
+                setSize(pageNumber, chapterIndex)
+                d?.updateProgressBar(pageNumber, size)
+                if (msg.obj != true) {
+                    Toast.makeText(d, "下载${d?.tbtnlist?.get(chapterIndex)?.textOn}的第${pageNumber}页失败", Toast.LENGTH_SHORT).show()
                 }else{
                     val progressTxt = d?.mBinding?.dldlbar?.tdwn?.text.toString()
                     d?.mBinding?.dldlbar?.tdwn?.apply { post {
-                        text = "${progressTxt.substringBefore(' ')} 的 ${msg.arg2}/${size} 页"
+                        text = "${progressTxt.substringBefore(' ')} 的 ${pageNumber}/${size} 页"
                     } }
                 }
             }
-            6 -> d?.mBinding?.dldlbar?.tdwn?.apply { post { text = "${d?.dldChapter}/${d?.checkedChapter}" } }
-            7 -> d?.deleteChapters()
-            8 -> d?.resources?.getColor(R.color.colorBlue)?.let { d?.mBinding?.dldlbar?.cdwn?.apply { post {
+            UPDATE_CHAPTER_PROGRESS -> d?.mBinding?.dldlbar?.tdwn?.apply { post { text = "${d?.dldChapter}/${d?.checkedChapter}" } }
+            DELETE_SELECTED_CHAPTERS -> d?.deleteChapters()
+            SET_DOWNLOAD_CARD_BLUE -> d?.resources?.getColor(R.color.colorBlue)?.let { d?.mBinding?.dldlbar?.cdwn?.apply { post {
                 setCardBackgroundColor(it)
             } } }
-            9 -> d?.resources?.getColor(R.color.colorRed)?.let { d?.mBinding?.dldlbar?.cdwn?.apply { post {
+            SET_DOWNLOAD_CARD_RED -> d?.resources?.getColor(R.color.colorRed)?.let { d?.mBinding?.dldlbar?.cdwn?.apply { post {
                 setCardBackgroundColor(it)
             } } }
-            10 -> Toast.makeText(d, "下载${d?.tbtnlist?.get(msg.arg1)?.textOn}的第${msg.arg2}页失败，尝试重新下载...", Toast.LENGTH_SHORT).show()
+            PAGE_DOWNLOAD_RETRYING -> Toast.makeText(d, "下载${d?.tbtnlist?.get(chapterIndex)?.textOn}的第${pageNumber}页失败，尝试重新下载...", Toast.LENGTH_SHORT).show()
         }
     }
     private fun setSize(pageNow: Int, tbtnNo: Int){
@@ -109,5 +111,18 @@ class DlHandler(activity: DlActivity, looper: Looper) : Handler(looper) {
             size = d?.tbtnlist?.get(tbtnNo)?.hash?.let { wmdlt?.get()?.getImgsCountByHash(it) }?:0
             refreshSize = false
         }else if(pageNow == size) refreshSize = true
+    }
+
+    companion object {
+        const val INITIALIZE_LAYOUTS = -2
+        const val CHAPTER_DOWNLOAD_FAILED = -1
+        const val CHAPTER_DOWNLOAD_SUCCEEDED = 1
+        const val TOGGLE_SELECT_ALL = 4
+        const val PAGE_DOWNLOAD_FINISHED = 5
+        const val UPDATE_CHAPTER_PROGRESS = 6
+        const val DELETE_SELECTED_CHAPTERS = 7
+        const val SET_DOWNLOAD_CARD_BLUE = 8
+        const val SET_DOWNLOAD_CARD_RED = 9
+        const val PAGE_DOWNLOAD_RETRYING = 10
     }
 }

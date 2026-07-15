@@ -28,12 +28,17 @@ class MainHandler(looper: Looper): Handler(looper) {
             }
             SET_LOADING_DIALOG_TEXT -> {
                 val t = msg.obj as? String?:return
-                dialog?.findViewById<TextView>(R.id.tunz)?.apply { post {
-                    text = t
-                } }
+                dialog?.findViewById<TextView>(R.id.tunz)?.text = t
             }
         }
     }
+
+    fun dispose() {
+        removeCallbacksAndMessages(null)
+        dialog?.dismiss()
+        dialog = null
+    }
+
     companion object {
         const val SHOW_LOADING_DIALOG = 7
         const val HIDE_LOADING_DIALOG = 8

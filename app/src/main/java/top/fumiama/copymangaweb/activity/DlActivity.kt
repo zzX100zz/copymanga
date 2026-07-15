@@ -61,13 +61,14 @@ class DlActivity : ToolsBoxActivity() {
             setWebViewClient("h.js")
             loadJSInterface(JSHidden(onLoadChapter = { onHiddenChapterLoaded(it) }))
         } }
-        handler.sendEmptyMessage(-2)        //setLayouts
+        handler.sendEmptyMessage(DlHandler.INITIALIZE_LAYOUTS)
     }
 
     override fun onDestroy() {
         wm?.get()?.saveUrlsOnly = false
         wmdlt?.get()?.exit = true
         handler.removeCallbacksAndMessages(null)
+        mBinding.dwh.destroy()
         super.onDestroy()
     }
 
@@ -99,7 +100,7 @@ class DlActivity : ToolsBoxActivity() {
         for (i in tbtnlist) {
             if (i.isChecked && !mangaDlTools.dlChapterUrl(i.url.toString())) {
                 ok = false
-                handler.obtainMessage(-1, i.index, 0).sendToTarget()
+                handler.obtainMessage(DlHandler.CHAPTER_DOWNLOAD_FAILED, i.index, 0).sendToTarget()
             }
         }
         return ok && mangaDlTools.waitChapterUrlsReady()
@@ -119,7 +120,7 @@ class DlActivity : ToolsBoxActivity() {
             haveDlStarted = false
             canDl = false
         }
-        handler.sendEmptyMessage(8)     //set dl card color to blue
+        handler.sendEmptyMessage(DlHandler.SET_DOWNLOAD_CARD_BLUE)
     }
 
     @SuppressLint("SetTextI18n")
@@ -150,7 +151,7 @@ class DlActivity : ToolsBoxActivity() {
                     else {
                         haveDlStarted = true
                         canDl = true
-                        handler.sendEmptyMessage(9)     //set dl card color to red
+                        handler.sendEmptyMessage(DlHandler.SET_DOWNLOAD_CARD_RED)
                         Toast.makeText(this@DlActivity, "请耐心等待加载...", Toast.LENGTH_SHORT).show()
                         Thread {
                             if (fillChapters()) {
@@ -158,14 +159,14 @@ class DlActivity : ToolsBoxActivity() {
                             } else {
                                 canDl = false
                                 haveDlStarted = false
-                                handler.sendEmptyMessage(8)
+                                handler.sendEmptyMessage(DlHandler.SET_DOWNLOAD_CARD_BLUE)
                             }
                         }.start()
                     }
                 }
             }
             it.setOnLongClickListener {
-                handler.sendEmptyMessage(4)
+                handler.sendEmptyMessage(DlHandler.TOGGLE_SELECT_ALL)
                 return@setOnLongClickListener true
             }
         } }
@@ -181,7 +182,7 @@ class DlActivity : ToolsBoxActivity() {
     }
 
     private fun analyzeStructure() {
-        ViewMangaActivity.zipList = arrayOf()
+        ViewMangaActivity.zipList = emptyArray()
         Gson().fromJson(json?.reader(), Array<ComicStructure>::class.java)?.let {
             for (group in it) {
                 val tc = layoutInflater.inflate(R.layout.line_caption, mBinding.ldwn, false)
@@ -224,12 +225,17 @@ class DlActivity : ToolsBoxActivity() {
         mangaDlTools.onDownloadedListener =
             object : MangaDlTools.OnDownloadedListener {
                 override fun handleMessage(succeed: Boolean) {
-                    handler.obtainMessage(if (succeed) 1 else -1, i.index, 0)
+                    handler.obtainMessage(
+                        if (succeed) DlHandler.CHAPTER_DOWNLOAD_SUCCEEDED
+                        else DlHandler.CHAPTER_DOWNLOAD_FAILED,
+                        i.index,
+                        0
+                    )
                         .sendToTarget()
                 }
                 override fun handleMessage(succeed: Boolean, pageNow: Int) {
                     handler.obtainMessage(
-                        5,
+                        DlHandler.PAGE_DOWNLOAD_FINISHED,
                         i.index,
                         pageNow,
                         succeed
@@ -237,7 +243,7 @@ class DlActivity : ToolsBoxActivity() {
                 }
                 override fun handleMessage(pageNow: Int){
                     handler.obtainMessage(
-                        10,
+                        DlHandler.PAGE_DOWNLOAD_RETRYING,
                         i.index,
                         pageNow
                     ).sendToTarget()
@@ -268,14 +274,19 @@ class DlActivity : ToolsBoxActivity() {
         tbtnlist += tbvTbtn
         tbvTbtn.url = url
         tbtncnt++
-        val zipPosition = ViewMangaActivity.zipList?.size
-        ViewMangaActivity.zipList = ViewMangaActivity.zipList?.plus("$title.zip")
         tbvTbtn.textOff = title
         tbvTbtn.textOn = title
         tbvTbtn.text = title
         tbvTbtn.hint = caption
         tbvTbtn.layoutParams.width = btnw
         val zipFile = File("${getExternalFilesDir("")}/$comicName/$caption/$title.zip")
+        val zipPosition = if (zipFile.exists()) {
+            ViewMangaActivity.zipList.orEmpty().size.also {
+                ViewMangaActivity.zipList = (
+                    ViewMangaActivity.zipList?.toList().orEmpty() + zipFile
+                ).toTypedArray()
+            }
+        } else null
         if (zipFile.exists()) {
             tbvTbtn.setBackgroundResource(R.drawable.rndbg_checked)
             tbvTbtn.isChecked = false
@@ -301,9 +312,7 @@ class DlActivity : ToolsBoxActivity() {
             } else if(tbtn.isChecked) {
                 tbtn.apply { post {
                     isChecked = false
-                    zipPosition?.let { Thread {
-                        callVM(title, zipFile, it)
-                    }.start() }
+                    zipPosition?.let { callVM(title, zipFile, it) }
                 } }
             }
         }
@@ -321,7 +330,7 @@ class DlActivity : ToolsBoxActivity() {
                                 text = "$dldChapter/${++checkedChapter}"
                             } }
                         }
-                        handler.sendEmptyMessage(7)
+                        handler.sendEmptyMessage(DlHandler.DELETE_SELECTED_CHAPTERS)
                     })
             }
             true
@@ -338,15 +347,16 @@ class DlActivity : ToolsBoxActivity() {
                 }
             }
         }
-        handler.sendEmptyMessage(6)
+        handler.sendEmptyMessage(DlHandler.UPDATE_CHAPTER_PROGRESS)
     }
 
     private fun callVM(titleText: String, zipFile: File, zipPosition:Int) {
         ViewMangaActivity.titleText = titleText
         ViewMangaActivity.zipFile = zipFile
-        //ViewMangaActivity.zipList = zipArrayList
         ViewMangaActivity.zipPosition = zipPosition
         ViewMangaActivity.cd = zipFile.parentFile
+        ViewMangaActivity.nextChapterUrl = null
+        ViewMangaActivity.previousChapterUrl = null
         startActivity(Intent(this@DlActivity, ViewMangaActivity::class.java))
     }
 

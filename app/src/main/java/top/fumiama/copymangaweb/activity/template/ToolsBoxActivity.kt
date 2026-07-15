@@ -16,7 +16,6 @@ open class ToolsBoxActivity: Activity(), LifecycleOwner {
         super.onCreate(savedInstanceState)
         lifecycleRegistry = LifecycleRegistry(this)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
-        lifecycleRegistry.currentState = Lifecycle.State.STARTED
 
         toolsBox = ToolsBox(WeakReference(this))
     }

@@ -7,41 +7,37 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.Message
 import android.util.Log
 import android.view.KeyEvent
-import android.view.LayoutInflater
 import android.view.View
-import android.view.ViewGroup
 import android.widget.SeekBar
 import android.widget.Toast
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.bumptech.glide.Glide
 import top.fumiama.copymangaweb.R
+import top.fumiama.copymangaweb.activity.reader.ContinuousMangaAdapter
+import top.fumiama.copymangaweb.activity.reader.PagedMangaAdapter
+import top.fumiama.copymangaweb.activity.reader.ReaderOverlayController
 import top.fumiama.copymangaweb.activity.MainActivity.Companion.wm
 import top.fumiama.copymangaweb.activity.template.ToolsBoxActivity
 import top.fumiama.copymangaweb.databinding.ActivityViewmangaBinding
-import top.fumiama.copymangaweb.handler.TimeThread
 import top.fumiama.copymangaweb.tool.PropertiesTools
-import top.fumiama.copymangaweb.tool.ToolsBox
+import top.fumiama.copymangaweb.tool.PagesManager
 import top.fumiama.copymangaweb.view.ScaleImageView
 import top.fumiama.copymangaweb.web.JSHidden
 import top.fumiama.copymangaweb.web.WebChromeClient
 import java.io.File
 import java.lang.ref.WeakReference
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.min
 import java.util.zip.ZipFile
-import java.util.zip.ZipInputStream
 
 class ViewMangaActivity : ToolsBoxActivity() {
-    lateinit var handler: Handler
-    lateinit var tt: TimeThread
     lateinit var mBinding: ActivityViewmangaBinding
 
     var count = 0
@@ -54,32 +50,40 @@ class ViewMangaActivity : ToolsBoxActivity() {
     private var isInSeek = false
     private var currentItem = 0
     private var notUseVP = true
+    private var verticalReading = false
     private var mangaZip = zipFile
     val dlZip2View = mangaZip != null
     private var streamUrl = streamChapterUrl
     private var readerPrepared = false
     private var streamFinished = false
     private var streamDeclaredCount = 0
+    private var userRequestedExit = false
+    private var backInvokedCallback: OnBackInvokedCallback? = null
     private val streamSeenUrls = LinkedHashSet<String>()
-    private var vpAdapter: RecyclerView.Adapter<ViewData>? = null
+    private var pagedAdapter: PagedMangaAdapter? = null
+    private var continuousAdapter: ContinuousMangaAdapter? = null
+    private val imageExecutor = Executors.newFixedThreadPool(2)
+    private lateinit var overlayController: ReaderOverlayController
+    private val pagesManager by lazy { PagesManager(WeakReference(this)) }
     private val volTurnPage get() = p["volturn"] == "true"
-    var pageNum = 1
-        get() {
-            field = getPageNumber()
-            return field
+    private val readerMode: ReaderMode
+        get() = when {
+            verticalReading -> ReaderMode.CONTINUOUS
+            notUseVP -> ReaderMode.SINGLE_PAGE
+            else -> ReaderMode.PAGED
         }
+    var pageNum: Int
+        get() = getPageNumber()
         set(value) {
-            setPageNumber(value)
-            if (notUseVP) {
-                //currentItem += delta
+            setPageNumber(value, smoothScroll = true)
+            if (readerMode == ReaderMode.SINGLE_PAGE) {
                 try {
                     loadOneImg()
                 } catch (e: java.lang.Exception) {
                     e.printStackTrace()
                     toolsBox.toastError("页数${currentItem}不合法")
                 }
-            }// else vp.currentItem += delta
-            field = getPageNumber()
+            }
         }
 
     @SuppressLint("SetTextI18n")
@@ -87,14 +91,18 @@ class ViewMangaActivity : ToolsBoxActivity() {
         super.onCreate(savedInstanceState)
         mBinding = ActivityViewmangaBinding.inflate(layoutInflater)
         setContentView(mBinding.root)
+        registerBackCallback()
         va = WeakReference(this)
         p = PropertiesTools(File("$filesDir/settings.properties"))
         r2l = p["r2l"] == "true"
         notUseVP = p["noAnimation"] == "true"
-        handler = MyHandler(toolsBox)
-        tt = TimeThread(handler, 22)
-        tt.canDo = true
-        tt.start()
+        verticalReading = p["vertical"] == "true"
+        overlayController = ReaderOverlayController(
+            activity = this,
+            binding = mBinding,
+            toolsBox = toolsBox,
+            drawerOffset = { infoDrawerDelta }
+        ).also { it.start() }
         dialog = Dialog(this)
         dialog?.apply {
             setContentView(R.layout.dialog_unzipping)
@@ -105,13 +113,18 @@ class ViewMangaActivity : ToolsBoxActivity() {
         if(dlZip2View && mangaZip?.exists() != true) toolsBox.toastError("已经到头了~")
         else if(!dlZip2View && !streamUrl.isNullOrBlank()) startStreamingCollector(streamUrl!!)
         else Thread {
-            try {
-                count = if (dlZip2View) countZipItems() else imgUrls.size
+            val initialCount = try {
+                if (dlZip2View) countZipItems() else imgUrls.size
             } catch (e: Exception) {
                 e.printStackTrace()
-                runOnUiThread { toolsBox.toastError("分析图片url错误") }
+                0
             }
-            runOnUiThread { prepareReaderIfNeeded() }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                count = initialCount
+                if (initialCount == 0) toolsBox.toastError("分析图片url错误")
+                prepareReaderIfNeeded()
+            }
         }.start()
     }
 
@@ -162,14 +175,15 @@ class ViewMangaActivity : ToolsBoxActivity() {
     private fun onStreamingCount(total: Int) {
         if (total <= 0) return
         runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
             val oldCount = count
             streamDeclaredCount = max(streamDeclaredCount, total)
             count = max(count, streamDeclaredCount)
             if (!readerPrepared) {
                 prepareReaderIfNeeded()
             } else {
-                if (!notUseVP && count > oldCount) {
-                    vpAdapter?.notifyItemRangeInserted(oldCount, count - oldCount)
+                if (readerMode != ReaderMode.SINGLE_PAGE && count > oldCount) {
+                    notifyPagesInserted(oldCount, count - oldCount)
                 }
                 syncSeekBarOnly()
             }
@@ -184,17 +198,25 @@ class ViewMangaActivity : ToolsBoxActivity() {
     }
 
     private fun onStreamingFinished() {
-        streamFinished = true
-        Log.d("CopymangaDL", "reader stream finished pages=$count")
         runOnUiThread {
-            dialog?.dismiss()
-            dialog = null
-            syncSeekBarOnly()
+            if (isFinishing || isDestroyed) return@runOnUiThread
+            streamFinished = true
+            Log.d(
+                "CopymangaDL",
+                "reader stream finished declared=$streamDeclaredCount received=${imgUrls.size}"
+            )
+            prepareReaderIfNeeded()
+            if (readerPrepared) {
+                dialog?.dismiss()
+                dialog = null
+                syncSeekBarOnly()
+            }
         }
     }
 
     private fun appendStreamingImages(urls: Array<String>) {
         runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
             val oldCount = count
             val oldImageCount = imgUrls.size
             var added = 0
@@ -209,12 +231,16 @@ class ViewMangaActivity : ToolsBoxActivity() {
             Log.d("CopymangaDL", "reader appended images added=$added total=$count images=${imgUrls.size}")
             if (!readerPrepared) prepareReaderIfNeeded()
             else {
-                if (notUseVP) {
+                if (readerMode == ReaderMode.SINGLE_PAGE) {
                     if (currentItem in oldImageCount until imgUrls.size) loadOneImg(hidePanel = false)
                     else syncSeekBarOnly()
                 } else {
-                    if (count > oldCount) vpAdapter?.notifyItemRangeInserted(oldCount, count - oldCount)
+                    if (count > oldCount) notifyPagesInserted(oldCount, count - oldCount)
                     notifyVisiblePagesIfArrived(oldImageCount, imgUrls.size)
+                    continuousAdapter?.notifyItemRangeChanged(
+                        oldImageCount,
+                        imgUrls.size - oldImageCount
+                    )
                     syncSeekBarOnly()
                 }
                 preloadAround(getLogicalCurrentItem())
@@ -223,17 +249,21 @@ class ViewMangaActivity : ToolsBoxActivity() {
     }
 
     private fun prepareReaderIfNeeded() {
+        if (
+            readerPrepared ||
+            count <= 0 ||
+            isFinishing ||
+            isDestroyed ||
+            shouldWaitForLastStreamingPage()
+        ) return
+        readerPrepared = true
         try {
-            if (count <= 0) return
             prepareItems()
-            if(pn > 0) {
-                pageNum = pn
-                pn = -1
-            } else if(pn == -2){
-                pageNum = count
-                pn = -1
-            }
+            setPageNumber(consumeRequestedPage(), smoothScroll = false)
+            if (readerMode == ReaderMode.SINGLE_PAGE) loadOneImg()
+            else syncSeekBarOnly()
         } catch (e: Exception) {
+            readerPrepared = false
             e.printStackTrace()
             toolsBox.toastError("准备控件错误")
         } finally {
@@ -242,6 +272,23 @@ class ViewMangaActivity : ToolsBoxActivity() {
                 dialog = null
             }
         }
+    }
+
+    private fun shouldWaitForLastStreamingPage(): Boolean {
+        if (streamUrl == null || pn != LAST_PAGE) return false
+        val allDeclaredPagesReceived =
+            streamDeclaredCount <= 0 || imgUrls.size >= streamDeclaredCount
+        return !streamFinished || !allDeclaredPagesReceived
+    }
+
+    private fun consumeRequestedPage(): Int {
+        val requestedPage = when {
+            pn == LAST_PAGE -> count
+            pn > 0 -> pn.coerceAtMost(count)
+            else -> 1
+        }
+        pn = FIRST_PAGE
+        return requestedPage
     }
 
     private fun preloadAround(position: Int) {
@@ -257,24 +304,20 @@ class ViewMangaActivity : ToolsBoxActivity() {
     }
 
     private fun getLogicalCurrentItem(): Int {
-        return if (notUseVP) currentItem
-        else if (r2l) count - mBinding.vp.currentItem - 1
-        else mBinding.vp.currentItem
-    }
-
-    private fun logicalToPagerPosition(logicalPosition: Int): Int {
-        return if (r2l) count - logicalPosition - 1 else logicalPosition
+        return when (readerMode) {
+            ReaderMode.SINGLE_PAGE, ReaderMode.CONTINUOUS -> currentItem
+            ReaderMode.PAGED -> mBinding.vp.currentItem
+        }
     }
 
     private fun notifyVisiblePagesIfArrived(oldImageCount: Int, newImageCount: Int) {
-        if (notUseVP || oldImageCount >= newImageCount || count <= 0) return
+        if (readerMode != ReaderMode.PAGED || oldImageCount >= newImageCount || count <= 0) return
         val center = getLogicalCurrentItem().coerceIn(0, count - 1)
         val from = max(0, center - 1)
         val to = min(newImageCount - 1, center + 1)
         for (logicalPosition in from..to) {
             if (logicalPosition >= oldImageCount) {
-                val pagerPosition = logicalToPagerPosition(logicalPosition)
-                if (pagerPosition in 0 until count) vpAdapter?.notifyItemChanged(pagerPosition)
+                pagedAdapter?.notifyItemChanged(logicalPosition)
             }
         }
     }
@@ -287,28 +330,57 @@ class ViewMangaActivity : ToolsBoxActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        var flag = false
-        if(volTurnPage) when(keyCode) {
-            KeyEvent.KEYCODE_VOLUME_UP -> {
-                scrollBack()
-                flag = true
+        if (volTurnPage) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP -> pagesManager.goBackward()
+                KeyEvent.KEYCODE_VOLUME_DOWN -> pagesManager.goForward()
+                else -> return super.onKeyDown(keyCode, event)
             }
-            KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                scrollForward()
-                flag = true
-            }
+            return true
         }
-        return if(flag) true else super.onKeyDown(keyCode, event)
+        return super.onKeyDown(keyCode, event)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        exitByUserRequest()
+    }
+
+    private fun registerBackCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        backInvokedCallback = OnBackInvokedCallback(::exitByUserRequest).also { callback ->
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                callback
+            )
+        }
+    }
+
+    private fun exitByUserRequest() {
+        userRequestedExit = true
+        finishAfterTransition()
     }
 
     private fun getPageNumber(): Int {
-        return if (r2l && !notUseVP) count - mBinding.vp.currentItem
-        else (if (notUseVP) currentItem else mBinding.vp.currentItem) + 1
+        return when (readerMode) {
+            ReaderMode.SINGLE_PAGE, ReaderMode.CONTINUOUS -> currentItem + 1
+            ReaderMode.PAGED -> mBinding.vp.currentItem + 1
+        }
     }
 
-    private fun setPageNumber(num: Int) {
-        if (r2l && !notUseVP) mBinding.vp.apply { post { currentItem = count - num } }
-        else if (notUseVP) currentItem = num - 1 else mBinding.vp.currentItem = num - 1
+    private fun setPageNumber(num: Int, smoothScroll: Boolean) {
+        val target = (num - 1).coerceIn(0, (count - 1).coerceAtLeast(0))
+        when (readerMode) {
+            ReaderMode.SINGLE_PAGE -> currentItem = target
+            ReaderMode.CONTINUOUS -> {
+                currentItem = target
+                mBinding.continuousPages.scrollToPosition(target)
+            }
+            ReaderMode.PAGED -> mBinding.vp.setCurrentItem(
+                target,
+                smoothScroll
+            )
+        }
     }
 
     private fun getImgBitmap(position: Int): Bitmap? {
@@ -340,6 +412,7 @@ class ViewMangaActivity : ToolsBoxActivity() {
     }
 
     private fun loadOneImg(hidePanel: Boolean = true) {
+        mBinding.vone.onei.resetImageTransform()
         if(dlZip2View) mBinding.vone.onei.apply { post { setImageBitmap(getImgBitmap(currentItem)) } }
         else {
             val url = imgUrls.getOrNull(currentItem)
@@ -364,14 +437,14 @@ class ViewMangaActivity : ToolsBoxActivity() {
     @SuppressLint("SetTextI18n")
     private fun prepareItems() {
         if (count <= 0) return
+        mBinding.vone.onei.setOnTapRegionListener(::onImageTapped)
         prepareVP()
         prepareInfoBar(count)
-        if (notUseVP) loadOneImg() else prepareIdBtVH()
         toolsBox.dp2px(67)?.let { setIdPosition(it) }
         prepareIdBtVolTurn()
+        prepareIdBtVH()
         prepareIdBtVP()
         prepareIdBtLR()
-        readerPrepared = true
     }
 
     private fun prepareIdBtLR() {
@@ -388,6 +461,7 @@ class ViewMangaActivity : ToolsBoxActivity() {
     private fun prepareIdBtVP() {
         mBinding.infcard.idtbvp.apply { post {
             isChecked = notUseVP
+            isEnabled = !verticalReading
             setOnClickListener {
                 if (mBinding.infcard.idtbvp.isChecked) p["noAnimation"] = "true"
                 else p["noAnimation"] = "false"
@@ -397,25 +471,107 @@ class ViewMangaActivity : ToolsBoxActivity() {
     }
 
     private fun prepareVP() {
-        if (notUseVP) {
-            mBinding.vp.apply { post { visibility = View.INVISIBLE } }
-            mBinding.vone.root.apply { post { visibility = View.VISIBLE } }
-        } else {
-            mBinding.vp.apply { post {
-                visibility = View.VISIBLE
-                vpAdapter = ViewData(this).RecyclerViewAdapter()
-                adapter = vpAdapter
+        mBinding.vone.root.visibility = if (readerMode == ReaderMode.SINGLE_PAGE) View.VISIBLE else View.GONE
+        mBinding.vp.visibility = if (readerMode == ReaderMode.PAGED) View.VISIBLE else View.GONE
+        mBinding.continuousPages.visibility = if (readerMode == ReaderMode.CONTINUOUS) View.VISIBLE else View.GONE
+
+        when (readerMode) {
+            ReaderMode.SINGLE_PAGE -> Unit
+            ReaderMode.PAGED -> mBinding.vp.apply {
+                layoutDirection = if (r2l) {
+                    View.LAYOUT_DIRECTION_RTL
+                } else {
+                    View.LAYOUT_DIRECTION_LTR
+                }
+                pagedAdapter = PagedMangaAdapter(
+                    itemCountProvider = { count },
+                    bindImage = ::bindPageImage
+                )
+                adapter = pagedAdapter
                 registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
                     override fun onPageSelected(position: Int) {
-                        val pos = if (r2l) count - position - 1 else position
-                        preloadAround(pos)
+                        preloadAround(position)
                         updateSeekBar()
                         super.onPageSelected(position)
                     }
                 })
-                if (r2l) currentItem = count - 1
-            } }
-            mBinding.vone.root.apply { post { visibility = View.INVISIBLE } }
+            }
+            ReaderMode.CONTINUOUS -> prepareContinuousReader()
+        }
+    }
+
+    private fun prepareContinuousReader() {
+        continuousAdapter = ContinuousMangaAdapter(
+            itemCountProvider = { count },
+            bindImage = ::bindPageImage
+        )
+        mBinding.continuousPages.apply {
+            adapter = continuousAdapter
+            itemAnimator = null
+            addOnScrollListener(object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                    val manager = recyclerView.layoutManager as? LinearLayoutManager ?: return
+                    val firstVisible = manager.findFirstVisibleItemPosition()
+                    if (firstVisible != RecyclerView.NO_POSITION) {
+                        currentItem = firstVisible
+                        syncSeekBarOnly()
+                        preloadAround(firstVisible)
+                    }
+                }
+            })
+        }
+    }
+
+    private fun notifyPagesInserted(positionStart: Int, itemCount: Int) {
+        if (itemCount <= 0) return
+        pagedAdapter?.notifyItemRangeInserted(positionStart, itemCount)
+        continuousAdapter?.notifyItemRangeInserted(positionStart, itemCount)
+    }
+
+    private fun bindPageImage(imageView: ScaleImageView, position: Int) {
+        imageView.tag = position
+        imageView.setOnTapRegionListener(::onImageTapped)
+        if (dlZip2View) loadZipImage(imageView, position)
+        else loadNetworkImage(imageView, position)
+    }
+
+    private fun onImageTapped(region: ScaleImageView.TapRegion) {
+        when (region) {
+            ScaleImageView.TapRegion.PREVIOUS -> {
+                if (readerMode == ReaderMode.CONTINUOUS) pagesManager.goBackward()
+                else pagesManager.toPreviousPage()
+            }
+            ScaleImageView.TapRegion.CENTER -> pagesManager.manageInfo()
+            ScaleImageView.TapRegion.NEXT -> {
+                if (readerMode == ReaderMode.CONTINUOUS) pagesManager.goForward()
+                else pagesManager.toNextPage()
+            }
+        }
+    }
+
+    private fun loadNetworkImage(imageView: ScaleImageView, position: Int) {
+        val url = imgUrls.getOrNull(position)
+        if (url.isNullOrBlank()) {
+            imageView.setImageResource(R.drawable.ic_dl)
+            return
+        }
+        Glide.with(this)
+            .load(toolsBox.resolution.wrap(url))
+            .placeholder(R.drawable.ic_dl)
+            .dontAnimate()
+            .into(imageView)
+        preloadAround(position)
+    }
+
+    private fun loadZipImage(imageView: ScaleImageView, position: Int) {
+        imageView.setImageResource(R.drawable.ic_dl)
+        imageExecutor.execute {
+            val bitmap = getImgBitmap(position)
+            imageView.post {
+                if (!isFinishing && !isDestroyed && imageView.tag == position) {
+                    imageView.setImageBitmap(bitmap)
+                }
+            }
         }
     }
 
@@ -459,28 +615,18 @@ class ViewMangaActivity : ToolsBoxActivity() {
         } }
         mBinding.oneinfo.inftitle.isearch.apply { post {
             visibility = View.INVISIBLE
-            setOnClickListener {
-                this@ViewMangaActivity.handler.sendEmptyMessage(3)
-            }
+            setOnClickListener { overlayController.toggleDrawer() }
         } }
         mBinding.oneinfo.inftxtprogress.apply { post { text = "$pageNum/$size" } }
     }
 
     private fun prepareIdBtVH() {
         mBinding.infcard.idtbvh.apply { post {
-            isChecked = p["vertical"] == "true"
+            isChecked = verticalReading
             setOnClickListener {
-                if (mBinding.infcard.idtbvh.isChecked) {
-                    mBinding.vp.apply { post { orientation = ViewPager2.ORIENTATION_VERTICAL } }
-                    p["vertical"] = "true"
-                } else {
-                    mBinding.vp.apply { post { orientation = ViewPager2.ORIENTATION_HORIZONTAL } }
-                    p["vertical"] = "false"
-                }
+                p["vertical"] = isChecked.toString()
+                Toast.makeText(this@ViewMangaActivity, "下次浏览生效", Toast.LENGTH_SHORT).show()
             }
-            if (isChecked) mBinding.vp.apply { post {
-                orientation = ViewPager2.ORIENTATION_VERTICAL
-            } }
         } }
     }
 
@@ -532,52 +678,24 @@ class ViewMangaActivity : ToolsBoxActivity() {
         } }
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        tt.canDo = false
-        wm?.get()?.mBinding?.w?.goBack()
-        super.onBackPressed()
-    }
-
     override fun onDestroy() {
-        tt.canDo = false
-        handler.removeCallbacksAndMessages(null)
-        if (streamUrl != null) streamChapterUrl = null
-        super.onDestroy()
-    }
-
-    inner class ViewData(itemView: View) : RecyclerView.ViewHolder(itemView) {
-        inner class RecyclerViewAdapter :
-            RecyclerView.Adapter<ViewData>() {
-            override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewData {
-                return ViewData(
-                    LayoutInflater.from(parent.context)
-                        .inflate(R.layout.page_imgview, parent, false)
-                )
-            }
-
-            @SuppressLint("ClickableViewAccessibility", "SetTextI18n")
-            override fun onBindViewHolder(holder: ViewData, position: Int) {
-                val pos = if (r2l) count - position - 1 else position
-                holder.itemView.findViewById<ScaleImageView>(R.id.onei)?.let { oneImage ->
-                    if(dlZip2View) getImgBitmap(pos)?.let {
-                        //Glide.with(this@ViewMangaActivity).load(it).placeholder(R.drawable.bg_comment).into(holder.itemView.onei)
-                        oneImage.setImageBitmap(it)
-                    }
-                    else imgUrls.getOrNull(pos)?.let { url ->
-                        Glide.with(this@ViewMangaActivity)
-                            .load(toolsBox.resolution.wrap(url)).placeholder(R.drawable.ic_dl)
-                            .dontAnimate().timeout(10000)
-                            .into(oneImage)
-                        preloadAround(pos)
-                    } ?: oneImage.setImageResource(R.drawable.ic_dl)
-                }
-            }
-
-            override fun getItemCount(): Int {
-                return count
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            backInvokedCallback?.let(onBackInvokedDispatcher::unregisterOnBackInvokedCallback)
         }
+        backInvokedCallback = null
+        overlayController.close()
+        imageExecutor.shutdownNow()
+        pagedAdapter = null
+        continuousAdapter = null
+        mBinding.vp.adapter = null
+        mBinding.continuousPages.adapter = null
+        dialog?.dismiss()
+        dialog = null
+        mBinding.wcollector.destroy()
+        if (userRequestedExit && !dlZip2View) wm?.get()?.mBinding?.w?.goBack()
+        if (streamUrl != null) streamChapterUrl = null
+        if (va?.get() === this) va = null
+        super.onDestroy()
     }
 
     fun showSettings() {
@@ -603,62 +721,17 @@ class ViewMangaActivity : ToolsBoxActivity() {
         ).setDuration(233).start()
         clicked = false
         mBinding.oneinfo.infseek.postDelayed({
+            if (isFinishing || isDestroyed) return@postDelayed
             mBinding.oneinfo.infseek.visibility = View.INVISIBLE
             mBinding.oneinfo.inftitle.isearch.visibility = View.INVISIBLE
         }, 300)
-        handler.sendEmptyMessage(1)
-    }
-
-    class MyHandler(
-        private val toolsBox: ToolsBox
-    ) : Handler(Looper.myLooper()!!) {
-        private var infoShown = false
-        private var delta = -1f
-            get() {
-                if (field < 0) field = va?.get()?.infoDrawerDelta ?: 0f
-                return field
-            }
-
-        @SuppressLint("SimpleDateFormat", "SetTextI18n")
-        override fun handleMessage(msg: Message) {
-            super.handleMessage(msg)
-            when (msg.what) {
-                1 -> if (infoShown) {
-                    hideInfCard(); infoShown = false
-                }
-                2 -> if (!infoShown) {
-                    showInfCard(); infoShown = true
-                }
-                3 -> infoShown = if (infoShown) {
-                    hideInfCard(); false
-                } else {
-                    showInfCard(); true
-                }
-                22 -> (toolsBox.zis as? ViewMangaActivity)?.mBinding?.infcard?.idtime?.apply { post {
-                    text = SimpleDateFormat("HH:mm")
-                        .format(Date()) + toolsBox.week + toolsBox.netInfo
-                } }
-            }
-        }
-
-        private fun showInfCard() {
-            Log.d("MyVM", "showInfCard delta $delta")
-            va?.get()?.mBinding?.infcard?.apply {
-                ObjectAnimator.ofFloat(idc, "alpha", 0.3F, 0.8F).setDuration(233).start()
-                ObjectAnimator.ofFloat(root, "translationY", delta, 0F).setDuration(233).start()
-            }
-        }
-
-        private fun hideInfCard() {
-            Log.d("MyVM", "hideInfCard delta $delta")
-            va?.get()?.mBinding?.infcard?.apply {
-                ObjectAnimator.ofFloat(idc, "alpha", 0.8F, 0.3F).setDuration(233).start()
-                ObjectAnimator.ofFloat(root, "translationY", 0F, delta).setDuration(233).start()
-            }
-        }
+        overlayController.hideDrawer()
     }
 
     companion object {
+        const val FIRST_PAGE = -1
+        const val LAST_PAGE = -2
+
         var va: WeakReference<ViewMangaActivity>? = null
         var imgUrls = arrayOf<String>()
         var zipFile: File? = null
@@ -671,9 +744,15 @@ class ViewMangaActivity : ToolsBoxActivity() {
         var nextChapterUrl: String? = null
         var previousChapterUrl: String? = null
         var zipPosition = 0
-        var zipList: Array<String>? = null
+        var zipList: Array<File>? = null
         var cd: File? = null
-        var pn = -1
+        var pn = FIRST_PAGE
         var streamChapterUrl: String? = null
+    }
+
+    private enum class ReaderMode {
+        SINGLE_PAGE,
+        PAGED,
+        CONTINUOUS,
     }
 }

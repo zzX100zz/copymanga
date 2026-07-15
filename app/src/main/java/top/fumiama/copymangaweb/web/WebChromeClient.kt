@@ -51,10 +51,9 @@ class WebChromeClient:WebChromeClient() {
         filePathCallback: ValueCallback<Array<Uri>>?,
         fileChooserParams: FileChooserParams?
     ): Boolean {
-        wm?.get()?.apply {
-            uploadMessageAboveL = filePathCallback
-            openImageChooserActivity()
-        }
+        val callback = filePathCallback ?: return false
+        val activity = wm?.get() ?: return false
+        activity.openImageChooserActivity(callback)
         return true
     }
 }

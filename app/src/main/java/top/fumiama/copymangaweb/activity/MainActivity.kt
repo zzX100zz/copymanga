@@ -3,12 +3,14 @@ package top.fumiama.copymangaweb.activity
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.view.View
-import android.view.WindowManager
 import android.webkit.ValueCallback
 import android.webkit.WebView
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -34,6 +36,9 @@ class MainActivity: ToolsBoxActivity() {
     var saveUrlsOnly = false
     lateinit var mBinding: ActivityMainBinding
     private val mViewModel = MainViewModel()
+    private var backInvokedCallback: OnBackInvokedCallback? = null
+    @Volatile
+    private var requestedDetailsUrl: String? = null
 
     @SuppressLint("JavascriptInterface")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,6 +48,7 @@ class MainActivity: ToolsBoxActivity() {
         mBinding.lifecycleOwner = this
         setContentView(mBinding.root)
         InsetsTools.applySafeContentInsets(this, mBinding.root)
+        registerBackCallback()
 
         wm = WeakReference(this)
         mh = MainHandler(Looper.myLooper()!!)
@@ -58,7 +64,7 @@ class MainActivity: ToolsBoxActivity() {
                 }
             }
 
-            WebView.setWebContentsDebuggingEnabled(true)
+            WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             mBinding.w.apply { post {
                 setWebViewClient("i.js")
                 webChromeClient = WebChromeClient()
@@ -78,36 +84,38 @@ class MainActivity: ToolsBoxActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if(mBinding.w.canGoBack()) mBinding.w.goBack()
-        else super.onBackPressed()
+        navigateBack()
+    }
+
+    private fun registerBackCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        backInvokedCallback = OnBackInvokedCallback(::navigateBack).also {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                it
+            )
+        }
+    }
+
+    private fun navigateBack() {
+        if (mBinding.w.canGoBack()) mBinding.w.goBack()
+        else finishAfterTransition()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == FILE_CHOOSER_RESULT_CODE) {  //处理返回的图片，并进行上传
-            if (uploadMessageAboveL == null || resultCode != RESULT_OK) return
-            data?.let {
-                onActivityResultAboveL(requestCode, resultCode, it)
-            }
-        }
+        if (requestCode != FILE_CHOOSER_RESULT_CODE) return
+
+        val callback = uploadMessageAboveL ?: return
+        uploadMessageAboveL = null
+        callback.onReceiveValue(if (resultCode == RESULT_OK) data?.selectedUris() else null)
     }
 
-    private fun onActivityResultAboveL(requestCode: Int, resultCode: Int, intent: Intent) {
-        if (requestCode != FILE_CHOOSER_RESULT_CODE ||
-            uploadMessageAboveL == null ||
-            resultCode != RESULT_OK
-        ) return
-        intent.clipData?.let { clipData ->
-            var results = arrayOf<Uri>()
-            for (i in 0..clipData.itemCount) {
-                val item = clipData.getItemAt(i)
-                results += item.uri
-            }
-            if (intent.dataString != null) {
-                uploadMessageAboveL?.onReceiveValue(results)
-                uploadMessageAboveL = null
-            }
-        }
+    private fun Intent.selectedUris(): Array<Uri>? {
+        val uris = clipData?.let { clips ->
+            Array(clips.itemCount) { index -> clips.getItemAt(index).uri }
+        } ?: data?.let { arrayOf(it) }
+        return uris?.takeIf { it.isNotEmpty() }
     }
 
     private suspend fun goCheckUpdate(ignoreSkip: Boolean) {
@@ -120,6 +128,7 @@ class MainActivity: ToolsBoxActivity() {
     }
 
     fun loadHiddenUrl(u: String) {
+        requestedDetailsUrl = u
         mBinding.wh.apply { post { loadUrl(u) } }
     }
 
@@ -137,7 +146,9 @@ class MainActivity: ToolsBoxActivity() {
         startActivity(Intent(this, ViewMangaActivity::class.java))
     }
 
-    fun setFab(content: String) {
+    fun setFab(content: String, sourceUrl: String, comicTitle: String) {
+        if (content.isBlank() || content == "[]" || !isRequestedDetailsPage(sourceUrl)) return
+        DlActivity.comicName = comicTitle
         json = content
         lifecycleScope.launch {
             withContext(Dispatchers.Main) {
@@ -148,6 +159,7 @@ class MainActivity: ToolsBoxActivity() {
     }
 
     fun setFab2DlList() {
+        requestedDetailsUrl = null
         lifecycleScope.launch {
             withContext(Dispatchers.Main) {
                 mViewModel.showDlList.value = true
@@ -157,7 +169,18 @@ class MainActivity: ToolsBoxActivity() {
     }
 
     fun hideFab() {
+        requestedDetailsUrl = null
         lifecycleScope.launch { mViewModel.setFabVisibility(false) }
+    }
+
+    private fun isRequestedDetailsPage(sourceUrl: String): Boolean {
+        val requestedPath = requestedDetailsUrl
+            ?.let(Uri::parse)
+            ?.path
+            ?.trimEnd('/')
+            ?: return false
+        val sourcePath = Uri.parse(sourceUrl).path?.trimEnd('/') ?: return false
+        return requestedPath == sourcePath
     }
 
     fun onFabClicked(v: View) {
@@ -168,13 +191,16 @@ class MainActivity: ToolsBoxActivity() {
         )
     }
 
-    fun openImageChooserActivity() {
-        // 调用自己的图库
+    fun openImageChooserActivity(callback: ValueCallback<Array<Uri>>) {
+        uploadMessageAboveL?.onReceiveValue(null)
+        uploadMessageAboveL = callback
         startActivityForResult(
             Intent.createChooser(
                 Intent(Intent.ACTION_GET_CONTENT)
                     .addCategory(Intent.CATEGORY_OPENABLE)
-                    .setType("image/*"), "Image Chooser"
+                    .setType("image/*")
+                    .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false),
+                "Image Chooser"
             ), FILE_CHOOSER_RESULT_CODE
         )
     }
@@ -182,25 +208,40 @@ class MainActivity: ToolsBoxActivity() {
     fun callViewManga(content: String) {
         lifecycleScope.launch { withContext(Dispatchers.IO) {
             val listChapter = content.split('\n')
+            if (listChapter.size < CHAPTER_METADATA_LINE_COUNT) return@withContext
+            val images = listChapter.drop(CHAPTER_METADATA_LINE_COUNT).toTypedArray()
             if(!saveUrlsOnly) {
                 ViewMangaActivity.titleText = listChapter[0].substringBeforeLast(' ')
                 ViewMangaActivity.nextChapterUrl = listChapter[1].let { if(it == "null") null else it }
                 ViewMangaActivity.previousChapterUrl = listChapter[2].let { if(it == "null") null else it }
-                ViewMangaActivity.imgUrls = arrayOf()
-                for(i in 3 until listChapter.size) ViewMangaActivity.imgUrls += listChapter[i]
+                ViewMangaActivity.imgUrls = images
                 withContext(Dispatchers.Main) {
                     startActivity(Intent(this@MainActivity, ViewMangaActivity::class.java))
                 }
             } else {
-                var imgs = arrayOf<String>()
-                for(i in 3 until listChapter.size) imgs += listChapter[i]
-                wmdlt?.get()?.setChapterImages(listChapter[0].substringAfterLast(' '), imgs)
+                wmdlt?.get()?.setChapterImages(listChapter[0].substringAfterLast(' '), images)
             }
         } }
     }
 
+    override fun onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            backInvokedCallback?.let(onBackInvokedDispatcher::unregisterOnBackInvokedCallback)
+        }
+        backInvokedCallback = null
+        uploadMessageAboveL?.onReceiveValue(null)
+        uploadMessageAboveL = null
+        mBinding.w.destroy()
+        mBinding.wh.destroy()
+        mh?.dispose()
+        mh = null
+        if (wm?.get() === this) wm = null
+        super.onDestroy()
+    }
+
     companion object {
-        const val FILE_CHOOSER_RESULT_CODE = 1
+        private const val FILE_CHOOSER_RESULT_CODE = 1
+        private const val CHAPTER_METADATA_LINE_COUNT = 3
         var wm: WeakReference<MainActivity>? = null
         var mh: MainHandler? = null
     }

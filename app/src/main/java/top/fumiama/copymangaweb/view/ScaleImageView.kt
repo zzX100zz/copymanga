@@ -15,8 +15,6 @@ import android.view.GestureDetector.SimpleOnGestureListener
 import android.view.MotionEvent
 import android.widget.ImageView
 import top.fumiama.copymangaweb.activity.ViewMangaActivity
-import top.fumiama.copymangaweb.tool.PagesManager
-import java.lang.ref.WeakReference
 import java.util.*
 import kotlin.math.sqrt
 
@@ -26,6 +24,28 @@ import kotlin.math.sqrt
  * @author clifford
  */
 class ScaleImageView : ImageView {
+    enum class TapRegion {
+        PREVIOUS,
+        CENTER,
+        NEXT,
+    }
+
+    private var onTapRegionListener: ((TapRegion) -> Unit)? = null
+
+    fun setOnTapRegionListener(listener: ((TapRegion) -> Unit)?) {
+        onTapRegionListener = listener
+    }
+
+    fun resetImageTransform() {
+        cancelAllAnimator()
+        mOuterMatrix.reset()
+        pinchMode = PINCH_MODE_FREE
+        mLastMovePoint.set(0f, 0f)
+        mScaleCenter.set(0f, 0f)
+        mScaleBase = 0f
+        invalidate()
+    }
+
     ////////////////////////////////监听器////////////////////////////////
     /**
      * 外界点击事件
@@ -672,24 +692,14 @@ class ScaleImageView : ImageView {
                 return true
             }
 
-            var v :WeakReference<ViewMangaActivity>? = null
-            var pm:PagesManager? = null
             override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
-                if(v == null) {
-                    v = ViewMangaActivity.va
-                    v?.let { pm = PagesManager(it) }
+                mOnClickListener?.onClick(this@ScaleImageView)
+                val region = when {
+                    width <= 0 || event.x <= width / 3f -> TapRegion.PREVIOUS
+                    event.x <= width * 2f / 3f -> TapRegion.CENTER
+                    else -> TapRegion.NEXT
                 }
-                //触发点击
-                if (mOnClickListener != null) {
-                    mOnClickListener!!.onClick(this@ScaleImageView)
-                }
-                (event.x / width).let {
-                    when {
-                        it <= 1.0 / 3.0 -> pm?.toPreviousPage()
-                        it <= 2.0 / 3.0 -> pm?.manageInfo()
-                        else -> pm?.toNextPage()
-                    }
-                }
+                onTapRegionListener?.invoke(region)
                 return true
             }
         })
@@ -739,6 +749,7 @@ class ScaleImageView : ImageView {
         } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
             //停止所有动画
             cancelAllAnimator()
+            parent.requestDisallowInterceptTouchEvent(true)
             //切换到缩放模式
             pinchMode = PINCH_MODE_SCALE
             //保存缩放的两个手指

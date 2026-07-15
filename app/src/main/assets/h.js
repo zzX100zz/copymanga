@@ -2,14 +2,60 @@ javascript:
 if (typeof (loaded) == "undefined") {
     var loaded = true;
     function scanChapters(chapter) {
-        var chapterList = chapter.getElementsByClassName("tab-pane fade show active")[0].getElementsByTagName("ul")[0].getElementsByTagName("a");
+        var activeTab = chapter.getElementsByClassName("tab-pane fade show active")[0];
+        var list = activeTab && activeTab.getElementsByTagName("ul")[0];
+        var chapterList = list ? list.getElementsByTagName("a") : [];
         var chapterArr = Array();
         for (var i = 0; i < chapterList.length; i++) {
-            chapterArr.push(JSON.constructor());
-            chapterArr[i]["name"] = chapterList[i].title;
-            chapterArr[i]["url"] = chapterList[i].href;
+            var name = chapterList[i].title || chapterList[i].innerText.trim();
+            var url = chapterList[i].href;
+            if (name && url) chapterArr.push({"name": name, "url": url});
         }
         return chapterArr;
+    }
+    var detailScanVersion = 0;
+    function collectChapterGroups() {
+        var container = document.getElementsByClassName("upLoop")[0];
+        if (!container || container.children.length < 2 || container.children.length % 2) return null;
+        var groups = Array();
+        for (var i = 0; i < container.children.length; i += 2) {
+            var name = container.children[i].innerText.trim();
+            var chapters = scanChapters(container.children[i + 1]);
+            if (!name || !chapters.length) return null;
+            groups.push({"name": name, "chapters": chapters});
+        }
+        return groups.length ? groups : null;
+    }
+    function waitForChapterGroups() {
+        var version = ++detailScanVersion;
+        var sourceUrl = location.href;
+        var lastChapterCount = -1;
+        var stableChecks = 0;
+        var startedAt = Date.now();
+        function scan() {
+            if (version !== detailScanVersion || location.href !== sourceUrl) return;
+            var groups = collectChapterGroups();
+            if (groups) {
+                var chapterCount = groups.reduce(function (count, group) {
+                    return count + group.chapters.length;
+                }, 0);
+                stableChecks = chapterCount === lastChapterCount ? stableChecks + 1 : 0;
+                lastChapterCount = chapterCount;
+                if (stableChecks >= 4) {
+                    var titleElement = document.getElementsByTagName("h6")[0];
+                    var comicTitle = titleElement && titleElement.title
+                        ? titleElement.title
+                        : document.title;
+                    GM.setFab(JSON.stringify(groups), sourceUrl, comicTitle);
+                    return;
+                }
+            } else {
+                stableChecks = 0;
+                lastChapterCount = -1;
+            }
+            if (Date.now() - startedAt < 120000) setTimeout(scan, 250);
+        }
+        scan();
     }
     function smoothLoadChapter(speed, interval) {
         let lastTime = 0;
@@ -156,22 +202,7 @@ if (typeof (loaded) == "undefined") {
             GM.setLoadingDialog(true);
             smoothLoadChapter(320, 16);
         } else {
-            var json = Array();
-            var chapters = document.getElementsByClassName("upLoop")[0].children;
-            var newObj = null;
-            for(var i = 0; i < chapters.length; i++) {
-                if(i % 2) {
-                    newObj["chapters"] = scanChapters(chapters[i]);
-                    json.push(newObj);
-                    newObj = null;
-                }
-                else {
-                    newObj = JSON.constructor();
-                    newObj["name"] = chapters[i].innerText;
-                }
-            }
-            GM.setTitle(document.getElementsByTagName("h6")[0].title);
-            GM.setFab(JSON.stringify(json));
+            waitForChapterGroups();
         }
     }
     modify();
