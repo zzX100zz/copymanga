@@ -50,7 +50,8 @@ object CopyMangaApi {
         val uuid: String,
         val previousUrl: String?,
         val nextUrl: String?,
-        val imageUrls: Array<String>
+        val imageUrls: Array<String>,
+        val sourceUrl: String? = null
     ) {
         fun toLegacyPayload(): String {
             val header = "$chapterName $uuid\n${nextUrl ?: "null"}\n${previousUrl ?: "null"}"
@@ -116,7 +117,7 @@ object CopyMangaApi {
     fun loadChapterForWebReader(url: String): Boolean {
         return try {
             val chapter = fetchChapter(url)
-            mh?.obtainMessage(6, gson.toJson(chapter))?.sendToTarget()
+            mh?.obtainMessage(6, gson.toJson(chapter.copy(sourceUrl = url)))?.sendToTarget()
             true
         } catch (e: Exception) {
             showError("读取完整章节失败", e)
@@ -128,6 +129,15 @@ object CopyMangaApi {
         val reference = chapterReferenceFromUrl(url)
             ?: throw IllegalArgumentException("无法识别章节地址: $url")
         return fetchChapter(reference.comicPath, reference.uuid)
+    }
+
+    fun fullChapterJsonForWebRequest(url: String): String {
+        val reference = chapterReferenceFromUrl(url)
+            ?: throw IllegalArgumentException("无法识别网页章节接口: $url")
+        return getJson(
+            "/api/v3/comic/${encodePath(reference.comicPath)}/chapter/" +
+                "${encodePath(reference.uuid)}?platform=$PLATFORM"
+        )
     }
 
     private fun fetchComic(path: String): Pair<String, Array<ComicStructure>> {

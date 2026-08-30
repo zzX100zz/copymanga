@@ -29,6 +29,12 @@ class CopyMangaApiTest {
             "copymanga://api/comic/grandblue/chapter/chapter-uuid"
         )
         assertEquals(h5, api)
+
+        val previewApi = CopyMangaApi.chapterReferenceFromUrl(
+            "https://api.copymanga.site/api/v3/comic/grandblue/chapter2/chapter-uuid" +
+                "?platform=1"
+        )
+        assertEquals(h5, previewApi)
     }
 
     @Test

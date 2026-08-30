@@ -35,16 +35,76 @@ if (typeof (loaded) == "undefined") {
         resetPreUrl: function () { this.preUrl = ""; },
         fullChapter: null,
         loadChapter: function () { GM.loadComic(location.href); },
+        findReaderViewModel: function (vm, visited) {
+            if (!vm || visited.indexOf(vm) >= 0) return null;
+            visited.push(vm);
+            if (vm.content && vm.content.chapter && vm.content.chapter.contents) return vm;
+            var children = vm.$children || [];
+            for (var i = 0; i < children.length; i++) {
+                var found = this.findReaderViewModel(children[i], visited);
+                if (found) return found;
+            }
+            return null;
+        },
         readerViewModel: function () {
             var root = document.querySelector(".comicContentPopup");
-            while (root && !root.__vue__) root = root.parentElement;
-            return root && root.__vue__ ? root.__vue__ : null;
+            var candidates = [];
+            while (root) {
+                if (root.__vue__) candidates.push(root.__vue__);
+                root = root.parentElement;
+            }
+            var app = document.querySelector("#app");
+            if (app && app.__vue__) candidates.push(app.__vue__);
+            for (var i = 0; i < candidates.length; i++) {
+                var found = this.findReaderViewModel(candidates[i], []);
+                if (found) return found;
+            }
+            return null;
+        },
+        sameRoute: function (left, right) {
+            function clean(url) {
+                return (url || "").split("?")[0].split("#")[0].replace(/\/$/, "");
+            }
+            return clean(left) == clean(right);
+        },
+        applyDomChapter: function (chapter) {
+            var list = document.querySelector(".comicContentPopupImageList");
+            if (!list || !chapter.imageUrls || !chapter.imageUrls.length) return false;
+            var oldApiItems = list.querySelectorAll(".copyMangaApiImageItem");
+            var renderedItems = list.querySelectorAll(".comicContentPopupImageItem");
+            if (!oldApiItems.length && renderedItems.length == chapter.imageUrls.length) return true;
+            var complete = oldApiItems.length == chapter.imageUrls.length;
+            if (complete && oldApiItems.length) {
+                complete = oldApiItems[0].getAttribute("data-url") == chapter.imageUrls[0] &&
+                    oldApiItems[oldApiItems.length - 1].getAttribute("data-url") ==
+                    chapter.imageUrls[chapter.imageUrls.length - 1];
+            }
+            if (complete) return true;
+            for (var i = oldApiItems.length - 1; i >= 0; i--) {
+                oldApiItems[i].parentNode.removeChild(oldApiItems[i]);
+            }
+            var previewItems = list.querySelectorAll(".comicContentPopupImageItem");
+            for (var j = 0; j < previewItems.length; j++) previewItems[j].style.display = "none";
+            var anchor = list.firstChild;
+            for (var k = 0; k < chapter.imageUrls.length; k++) {
+                var item = document.createElement("li");
+                item.className = "comicContentPopupImageItem copyMangaApiImageItem";
+                item.setAttribute("data-url", chapter.imageUrls[k]);
+                item.style.cssText = "display:block;width:100%;margin:0;padding:0;list-style:none;";
+                var image = document.createElement("img");
+                image.src = chapter.imageUrls[k];
+                image.style.cssText = "display:block;width:100%;height:auto;margin:0;padding:0;";
+                item.appendChild(image);
+                list.insertBefore(item, anchor);
+            }
+            return true;
         },
         applyFullChapter: function () {
             var chapter = this.fullChapter;
-            if (!chapter || !chapter.uuid || location.href.indexOf(chapter.uuid) < 0) return false;
+            if (!chapter || !chapter.imageUrls ||
+                (chapter.sourceUrl && !this.sameRoute(chapter.sourceUrl, location.href))) return false;
             var vm = this.readerViewModel();
-            if (!vm || !vm.content || !vm.content.chapter || !chapter.imageUrls) return false;
+            if (!vm || !vm.content || !vm.content.chapter) return this.applyDomChapter(chapter);
             var current = vm.content.chapter.contents || [];
             var different = current.length != chapter.imageUrls.length;
             if (!different && current.length) {
@@ -52,7 +112,7 @@ if (typeof (loaded) == "undefined") {
                     !current[current.length - 1] ||
                     current[current.length - 1].url != chapter.imageUrls[chapter.imageUrls.length - 1];
             }
-            if (!different) return true;
+            if (!different) return this.applyDomChapter(chapter) || true;
             var contents = [];
             for (var i = 0; i < chapter.imageUrls.length; i++) contents.push({url: chapter.imageUrls[i]});
             if (vm.$set) {
@@ -66,6 +126,7 @@ if (typeof (loaded) == "undefined") {
             vm.isNotContent = false;
             vm.previewImages = [];
             if (vm.$forceUpdate) vm.$forceUpdate();
+            this.applyDomChapter(chapter);
             return true;
         },
         urlChangeListener: function (todo) {

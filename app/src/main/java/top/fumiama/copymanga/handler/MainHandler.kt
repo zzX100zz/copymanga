@@ -60,9 +60,8 @@ class MainHandler(looper: Looper):Handler(looper) {
     private fun setFab(content: String){
         //Log.d("MyMH", "Get chapter json: $content")
         comicStructure = Gson().fromJson(content.reader(), Array<ComicStructure>::class.java)
-        wm?.get()?.fab?.visibility = View.VISIBLE
     }
-    private fun hideFab() {wm?.get()?.fab?.visibility = View.GONE}
+    private fun hideFab() = Unit
     private fun applyChapterToWebReader(content: String) {
         wm?.get()?.applyChapterToWebReader(content)
     }

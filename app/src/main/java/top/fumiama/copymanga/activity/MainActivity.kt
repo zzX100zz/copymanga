@@ -2,7 +2,6 @@ package top.fumiama.copymanga.activity
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.Intent
 import android.os.Bundle
 import android.os.Looper
 import android.view.View
@@ -74,10 +73,6 @@ class MainActivity: Activity() {
         } else {
             View.SYSTEM_UI_FLAG_VISIBLE
         }
-    }
-
-    fun onFabClicked(v: View){
-        startActivity(Intent(this, DlActivity::class.java))
     }
 
     companion object{
