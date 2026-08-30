@@ -2,6 +2,7 @@ package top.fumiama.copymanga
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import top.fumiama.copymanga.api.CopyMangaApi
 
@@ -51,5 +52,30 @@ class CopyMangaApiTest {
             "第1话 chapter-uuid\nnext-url\nprevious-url\nimage-1\nimage-2",
             chapter.toLegacyPayload()
         )
+    }
+
+    @Test
+    fun mergesCompletePagesIntoOfficialResponseAndNormalizesEmptyWords() {
+        val official = """{
+            "code":200,
+            "results":{"record_marker":"official","chapter":{
+                "uuid":"chapter-uuid","contents":[{"url":"preview"}],"words":[0],"size":1
+            }}
+        }""".trimIndent()
+        val full = """{
+            "code":200,
+            "results":{"chapter":{
+                "uuid":"chapter-uuid","contents":[
+                    {"url":"image-1"},{"url":"image-2"},{"url":"image-3"}
+                ],"words":[],"size":3
+            }}
+        }""".trimIndent()
+
+        val merged = CopyMangaApi.mergeFullChapterForWeb(official, full)
+
+        assertTrue(merged.contains("\"record_marker\":\"official\""))
+        assertTrue(merged.contains("\"contents\":[{\"url\":\"image-1\"}"))
+        assertTrue(merged.contains("\"words\":[0,1,2]"))
+        assertTrue(merged.contains("\"size\":3"))
     }
 }

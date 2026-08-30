@@ -3,6 +3,9 @@ package top.fumiama.copymanga.api
 import android.util.Log
 import android.widget.Toast
 import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import top.fumiama.copymanga.activity.DlActivity
 import top.fumiama.copymanga.activity.MainActivity.Companion.mh
 import top.fumiama.copymanga.activity.MainActivity.Companion.wm
@@ -134,10 +137,74 @@ object CopyMangaApi {
     fun fullChapterJsonForWebRequest(url: String): String {
         val reference = chapterReferenceFromUrl(url)
             ?: throw IllegalArgumentException("无法识别网页章节接口: $url")
-        return getJson(
+        val fullBody = getJson(
             "/api/v3/comic/${encodePath(reference.comicPath)}/chapter/" +
                 "${encodePath(reference.uuid)}?platform=$PLATFORM"
         )
+        return mergeFullChapterForWeb(null, fullBody)
+    }
+
+    /**
+     * Keep the H5 response metadata (including its reading-record semantics), but
+     * replace the five-page preview with the App API's complete chapter.
+     *
+     * Some current App API nodes return an empty `words` array. The old H5 client
+     * always treats `words` as a permutation table; an empty table therefore turns
+     * every page into a sparse/empty array. Supply an identity permutation so the
+     * original Vue reader, page tracking and local history all remain functional.
+     */
+    fun mergeFullChapterForWeb(officialBody: String?, fullBody: String): String {
+        val fullRoot = parseObject(fullBody)
+        val fullChapter = chapterObject(fullRoot)
+            ?: throw IllegalStateException("完整章节内容为空")
+        normalizeWords(fullChapter)
+
+        val targetRoot = officialBody
+            ?.let { runCatching { parseObject(it) }.getOrNull() }
+            ?.takeIf {
+                it.get("code")?.asInt == 200 && chapterObject(it) != null
+            }
+            ?: fullRoot
+        val targetChapter = chapterObject(targetRoot)
+            ?: throw IllegalStateException("网页章节内容为空")
+
+        // These fields are consumed by activeNextAndPrev() and read_history.atomicUpsert().
+        // Retain official values where present and fill only genuinely missing metadata.
+        arrayOf("comic_path_word", "comic_id", "uuid", "name", "prev", "next").forEach { key ->
+            val current = targetChapter.get(key)
+            val missing = current == null || current.isJsonNull ||
+                (current.isJsonPrimitive && current.asJsonPrimitive.isString &&
+                    current.asString.isEmpty())
+            if (missing) fullChapter.get(key)?.let { targetChapter.add(key, it.deepCopy()) }
+        }
+        targetChapter.add("contents", fullChapter.get("contents").deepCopy())
+        targetChapter.add("words", fullChapter.get("words").deepCopy())
+        targetChapter.addProperty(
+            "size",
+            fullChapter.getAsJsonArray("contents")?.size() ?: 0
+        )
+        return gson.toJson(targetRoot)
+    }
+
+    private fun parseObject(body: String): JsonObject =
+        JsonParser().parse(body).asJsonObject
+
+    private fun chapterObject(root: JsonObject): JsonObject? =
+        root.getAsJsonObject("results")?.getAsJsonObject("chapter")
+
+    private fun normalizeWords(chapter: JsonObject) {
+        val contents = chapter.getAsJsonArray("contents") ?: JsonArray().also {
+            chapter.add("contents", it)
+        }
+        val words = chapter.getAsJsonArray("words")
+        if (contents.size() > 0 && (words == null || words.size() == 0)) {
+            val identity = JsonArray()
+            for (index in 0 until contents.size()) identity.add(index)
+            chapter.add("words", identity)
+        } else if (words == null) {
+            chapter.add("words", JsonArray())
+        }
+        chapter.addProperty("size", contents.size())
     }
 
     private fun fetchComic(path: String): Pair<String, Array<ComicStructure>> {

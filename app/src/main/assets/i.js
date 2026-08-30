@@ -34,7 +34,17 @@ if (typeof (loaded) == "undefined") {
         },
         resetPreUrl: function () { this.preUrl = ""; },
         fullChapter: null,
+        chapterRoute: "",
+        resetChapterScroll: false,
         loadChapter: function () { GM.loadComic(location.href); },
+        hidePageBadge: function () {
+            if (!document.getElementById("copyMangaHidePageBadge")) {
+                var style = document.createElement("style");
+                style.id = "copyMangaHidePageBadge";
+                style.textContent = ".comicFixed,.comicFixedAcross{display:none!important;}";
+                (document.head || document.documentElement).appendChild(style);
+            }
+        },
         findReaderViewModel: function (vm, visited) {
             if (!vm || visited.indexOf(vm) >= 0) return null;
             visited.push(vm);
@@ -66,6 +76,36 @@ if (typeof (loaded) == "undefined") {
                 return (url || "").split("?")[0].split("#")[0].replace(/\/$/, "");
             }
             return clean(left) == clean(right);
+        },
+        noteChapterRoute: function (url) {
+            if (!this.sameRoute(this.chapterRoute, url)) {
+                this.chapterRoute = url;
+                this.resetChapterScroll = true;
+                this.scrollToChapterStart();
+            }
+        },
+        scrollToChapterStart: function () {
+            var vm = this.readerViewModel();
+            if (vm) vm.num = 1;
+            function reset() {
+                var vertical = document.querySelector("#comicContentMain");
+                var horizontal = document.querySelector("#leftSwiper");
+                if (vertical) {
+                    vertical.scrollTop = 0;
+                    if (vertical.scrollTo) vertical.scrollTo(0, 0);
+                }
+                if (horizontal) {
+                    horizontal.scrollLeft = 0;
+                    horizontal.scrollTop = 0;
+                    if (horizontal.scrollTo) horizontal.scrollTo(0, 0);
+                }
+                window.scrollTo(0, 0);
+                document.documentElement.scrollTop = 0;
+                if (document.body) document.body.scrollTop = 0;
+            }
+            reset();
+            setTimeout(reset, 120);
+            setTimeout(reset, 450);
         },
         applyDomChapter: function (chapter) {
             var list = document.querySelector(".comicContentPopupImageList");
@@ -104,7 +144,14 @@ if (typeof (loaded) == "undefined") {
             if (!chapter || !chapter.imageUrls ||
                 (chapter.sourceUrl && !this.sameRoute(chapter.sourceUrl, location.href))) return false;
             var vm = this.readerViewModel();
-            if (!vm || !vm.content || !vm.content.chapter) return this.applyDomChapter(chapter);
+            if (!vm || !vm.content || !vm.content.chapter) {
+                var domApplied = this.applyDomChapter(chapter);
+                if (domApplied && this.resetChapterScroll) {
+                    this.resetChapterScroll = false;
+                    this.scrollToChapterStart();
+                }
+                return domApplied;
+            }
             var current = vm.content.chapter.contents || [];
             var different = current.length != chapter.imageUrls.length;
             if (!different && current.length) {
@@ -112,7 +159,14 @@ if (typeof (loaded) == "undefined") {
                     !current[current.length - 1] ||
                     current[current.length - 1].url != chapter.imageUrls[chapter.imageUrls.length - 1];
             }
-            if (!different) return this.applyDomChapter(chapter) || true;
+            if (!different) {
+                var alreadyApplied = this.applyDomChapter(chapter) || true;
+                if (this.resetChapterScroll) {
+                    this.resetChapterScroll = false;
+                    this.scrollToChapterStart();
+                }
+                return alreadyApplied;
+            }
             var contents = [];
             for (var i = 0; i < chapter.imageUrls.length; i++) contents.push({url: chapter.imageUrls[i]});
             if (vm.$set) {
@@ -127,6 +181,10 @@ if (typeof (loaded) == "undefined") {
             vm.previewImages = [];
             if (vm.$forceUpdate) vm.$forceUpdate();
             this.applyDomChapter(chapter);
+            if (this.resetChapterScroll) {
+                this.resetChapterScroll = false;
+                this.scrollToChapterStart();
+            }
             return true;
         },
         urlChangeListener: function (todo) {
@@ -136,6 +194,7 @@ if (typeof (loaded) == "undefined") {
     function modify() {
         var url = location.href;
         GM.hideFab();
+        invoke.hidePageBadge();
         GM.setReaderFullscreen(url.indexOf("/comicContent/") > 0);
         if (url.endsWith("/index")) {
             invoke.pinTitle();
@@ -146,12 +205,16 @@ if (typeof (loaded) == "undefined") {
             invoke.hideRanobeRack();
         }
         else if (url.indexOf("/searchContent") > 0) invoke.hideRanobeRack();
-        else if (url.indexOf("/comicContent/") > 0) setTimeout(function () { invoke.loadChapter() }, 1000);
+        else if (url.indexOf("/comicContent/") > 0) {
+            invoke.noteChapterRoute(url);
+            setTimeout(function () { invoke.loadChapter() }, 1000);
+        }
         else if (url.indexOf("/details/comic/") > 0) GM.loadComic(url);
     }
     window.copyMangaApplyChapter = function (payload) {
         try {
             invoke.fullChapter = typeof payload == "string" ? JSON.parse(payload) : payload;
+            invoke.noteChapterRoute(invoke.fullChapter.sourceUrl || location.href);
             invoke.applyFullChapter();
         } catch (error) {
             console.error("Unable to apply full App API chapter", error);
@@ -159,7 +222,10 @@ if (typeof (loaded) == "undefined") {
     };
     modify();
     invoke.urlChangeListener(modify);
-    setInterval(function () { invoke.applyFullChapter(); }, 750);
+    setInterval(function () {
+        invoke.hidePageBadge();
+        invoke.applyFullChapter();
+    }, 750);
 } else {
     setTimeout(modify, 1280);
 }
