@@ -16,9 +16,17 @@
 
         <androidx.constraintlayout.widget.ConstraintLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:foreground="@drawable/line_colorful"
-            android:foregroundGravity="fill_horizontal|bottom|center">
+            android:layout_height="match_parent">
+
+            <ImageView
+                android:layout_width="0dp"
+                android:layout_height="2dp"
+                android:contentDescription="@null"
+                android:scaleType="fitXY"
+                android:src="@drawable/line_colorful"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent" />
 
             <TextView
                 android:id="@+id/ttitle"
