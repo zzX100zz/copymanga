@@ -25,6 +25,7 @@ import kotlin.math.sqrt
  *
  * @author clifford
  */
+@SuppressLint("AppCompatCustomView")
 class ScaleImageView : ImageView {
     ////////////////////////////////监听器////////////////////////////////
     /**
