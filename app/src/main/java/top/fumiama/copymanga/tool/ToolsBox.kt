@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.widget.Toast
 import top.fumiama.copymanga.R
 import java.lang.ref.WeakReference
@@ -31,16 +32,32 @@ class ToolsBox(w: WeakReference<Any>) {
         get() {
             val cm: ConnectivityManager =
                 zis?.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            return cm.getNetworkCapabilities(cm.activeNetwork)?.let {
-                when {
-                    it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> return@let "WIFI"
-                    it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> return@let "移动数据"
-                    it.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> return@let "蓝牙"
-                    it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> return@let "以太网"
-                    it.hasTransport(NetworkCapabilities.TRANSPORT_LOWPAN) -> return@let "LOWPAN"
-                    else -> return@let "无网络"
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                cm.getNetworkCapabilities(cm.activeNetwork)?.let {
+                    when {
+                        it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> return@let "WIFI"
+                        it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> return@let "移动数据"
+                        it.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> return@let "蓝牙"
+                        it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> return@let "以太网"
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1 &&
+                                it.hasTransport(NetworkCapabilities.TRANSPORT_LOWPAN) -> return@let "LOWPAN"
+                        else -> return@let "其他网络"
+                    }
+                } ?: "无网络"
+            } else {
+                @Suppress("DEPRECATION")
+                val info = cm.activeNetworkInfo ?: return "无网络"
+                @Suppress("DEPRECATION")
+                if (!info.isConnected) return "无网络"
+                @Suppress("DEPRECATION")
+                when (info.type) {
+                    ConnectivityManager.TYPE_WIFI -> "WIFI"
+                    ConnectivityManager.TYPE_MOBILE -> "移动数据"
+                    ConnectivityManager.TYPE_BLUETOOTH -> "蓝牙"
+                    ConnectivityManager.TYPE_ETHERNET -> "以太网"
+                    else -> "其他网络"
                 }
-            } ?: "错误"
+            }
         }
     fun toastError(s: String, willFinish: Boolean = true) {
         Toast.makeText(zis?.applicationContext, s, Toast.LENGTH_SHORT).show()
