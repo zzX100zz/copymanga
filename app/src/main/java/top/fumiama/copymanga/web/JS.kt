@@ -12,9 +12,13 @@ class JS {
         Thread {
             when {
                 url.contains("/details/comic/") -> CopyMangaApi.loadComicForUi(url)
-                url.contains("/comicContent/") -> CopyMangaApi.loadChapterForReader(url)
+                url.contains("/comicContent/") -> CopyMangaApi.loadChapterForWebReader(url)
             }
         }.start()
+    }
+    @JavascriptInterface
+    fun setReaderFullscreen(enabled: Boolean){
+        mh?.obtainMessage(7, if (enabled) 1 else 0, 0)?.sendToTarget()
     }
     @JavascriptInterface
     fun hideFab(){

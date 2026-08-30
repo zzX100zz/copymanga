@@ -27,6 +27,8 @@ class MainHandler(looper: Looper):Handler(looper) {
             3 -> updateLoadProgress(msg.arg1)
             4 -> setFab(msg.obj as String)
             5 -> hideFab()
+            6 -> applyChapterToWebReader(msg.obj as String)
+            7 -> setReaderFullscreen(msg.arg1 == 1)
         }
     }
     private fun loadUrlInHiddenWebView(url: String){wm?.get()?.wh?.loadUrl(url)}
@@ -61,4 +63,10 @@ class MainHandler(looper: Looper):Handler(looper) {
         wm?.get()?.fab?.visibility = View.VISIBLE
     }
     private fun hideFab() {wm?.get()?.fab?.visibility = View.GONE}
+    private fun applyChapterToWebReader(content: String) {
+        wm?.get()?.applyChapterToWebReader(content)
+    }
+    private fun setReaderFullscreen(enabled: Boolean) {
+        wm?.get()?.setReaderFullscreen(enabled)
+    }
 }

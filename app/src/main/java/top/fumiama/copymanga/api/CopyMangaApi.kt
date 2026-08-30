@@ -113,6 +113,17 @@ object CopyMangaApi {
         }
     }
 
+    fun loadChapterForWebReader(url: String): Boolean {
+        return try {
+            val chapter = fetchChapter(url)
+            mh?.obtainMessage(6, gson.toJson(chapter))?.sendToTarget()
+            true
+        } catch (e: Exception) {
+            showError("读取完整章节失败", e)
+            false
+        }
+    }
+
     fun fetchChapter(url: String): ChapterData {
         val reference = chapterReferenceFromUrl(url)
             ?: throw IllegalArgumentException("无法识别章节地址: $url")
