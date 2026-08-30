@@ -2,21 +2,23 @@ package top.fumiama.copymanga.web
 
 import android.util.Log
 import android.webkit.JavascriptInterface
-import top.fumiama.copymanga.R
 import top.fumiama.copymanga.activity.MainActivity.Companion.mh
-import top.fumiama.copymanga.activity.MainActivity.Companion.wm
-import top.fumiama.copymanga.activity.ViewMangaActivity
+import top.fumiama.copymanga.api.CopyMangaApi
 
 class JS {
     @JavascriptInterface
     fun loadComic(url: String){
-        val u = when {
-            url.contains("/details/comic/") -> "${wm?.get()?.getString(R.string.web_comic_detail_pc)}${url.substringAfter("comic")}"
-            url.contains("/comicContent/") -> "${wm?.get()?.getString(R.string.web_comic_detail_pc)}/${url.substringAfter("comicContent/").substringBefore("/")}/chapter/${url.substringAfterLast("/")}"
-            else -> ""
-        }
-        Log.d("MyJS", "Load comic: $u")
-        Thread{mh?.obtainMessage(1, u)?.sendToTarget()}.start()
+        Log.d("MyJS", "Load comic through App API: $url")
+        Thread {
+            when {
+                url.contains("/details/comic/") -> CopyMangaApi.loadComicForUi(url)
+                url.contains("/comicContent/") -> CopyMangaApi.loadChapterForWebReader(url)
+            }
+        }.start()
+    }
+    @JavascriptInterface
+    fun setReaderFullscreen(enabled: Boolean){
+        mh?.obtainMessage(7, if (enabled) 1 else 0, 0)?.sendToTarget()
     }
     @JavascriptInterface
     fun hideFab(){

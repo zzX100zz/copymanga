@@ -25,7 +25,6 @@ import top.fumiama.copymanga.tool.MangaDlTools.Companion.wmdlt
 import top.fumiama.copymanga.tool.ToolsBox
 import top.fumiama.copymanga.view.LazyScrollView
 import java.io.File
-import java.lang.Thread.sleep
 import java.lang.ref.WeakReference
 
 
@@ -84,7 +83,7 @@ class DlActivity : Activity() {
     }
 
     private fun dlThead(dlMethod: (i: ToggleButton) -> Unit) {
-        sleep(2333)
+        mangaDlTools.awaitChapterUrls()
         for (i in tbtnlist.listIterator()) {
             if (i.isChecked) dlMethod(i)
             if (!canDl) break

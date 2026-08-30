@@ -1,9 +1,8 @@
 package top.fumiama.copymanga.tool
 
 import android.widget.Toast
-import kotlinx.android.synthetic.main.activity_main.*
-import top.fumiama.copymanga.activity.MainActivity.Companion.wm
 import top.fumiama.copymanga.activity.ViewMangaActivity
+import top.fumiama.copymanga.api.CopyMangaApi
 import java.lang.ref.WeakReference
 
 class PagesManager(w: WeakReference<ViewMangaActivity>) {
@@ -35,9 +34,14 @@ class PagesManager(w: WeakReference<ViewMangaActivity>) {
                 }
             } else if (chapterUrl != null) {
                 if (if(goNext)isEndR else isEndL) {
-                    wm?.get()?.w?.loadUrl("javascript:invoke.clickClass(\"comicControlBottomTopClick\",${if(goNext)1 else 0});")
-                    v.tt.canDo = false
-                    v.finish()
+                    Thread {
+                        if (CopyMangaApi.loadChapterForReader(chapterUrl)) {
+                            v.runOnUiThread {
+                                v.tt.canDo = false
+                                v.finish()
+                            }
+                        }
+                    }.start()
                 } else {
                     Toast.makeText(
                         v.applicationContext,
